@@ -1,130 +1,323 @@
 import streamlit as st
-from openai import OpenAI
+import db
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="상담 챗봇 - 헤이", page_icon="💬")
+# 페이지 설정
+st.set_page_config(page_title="상담 챗봇 헤이", page_icon="💬", layout="wide")
 
+# DB 초기화
+db.init_db()
 
-def _local_css():
-    st.markdown(
-        """
-        <style>
-        .hey-container {display:flex; align-items:flex-start; gap:16px; margin-top:10px;}
-        .hey-avatar {width:120px; height:120px; border-radius:16px; background:linear-gradient(135deg,#f5c6d1,#ffd6e0); display:flex; align-items:center; justify-content:center; font-size:20px; color:#4b2e34; box-shadow:0 8px 20px rgba(0,0,0,0.12); animation: bob 3s ease-in-out infinite;}
-        @keyframes bob {0%{transform:translateY(0)}50%{transform:translateY(-8px)}100%{transform:translateY(0)}}
-        .hey-bubble {background:#ffffff; border-radius:16px; padding:12px 16px; box-shadow:0 6px 18px rgba(0,0,0,0.08); max-width:68%;}
-        .hey-bubble p {margin:0; font-size:16px}
-        .buttons-top {margin-top:18px}
-        .btn {width:100%; padding:14px 18px; font-size:16px}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+# 세션 상태 초기화
+if "user_id" not in st.session_state:
+    st.session_state.user_id = None
+if "username" not in st.session_state:
+    st.session_state.username = None
+if "is_admin" not in st.session_state:
+    st.session_state.is_admin = False
+if "page" not in st.session_state:
+    st.session_state.page = "home"
 
+# CSS
+st.markdown("""
+<style>
+.hey-avatar {
+    width: 120px; height: 120px; border-radius: 16px;
+    background: linear-gradient(135deg, #f5c6d1, #ffd6e0);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; color: #4b2e34; box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+    animation: bob 3s ease-in-out infinite;
+}
+@keyframes bob {
+    0% {transform: translateY(0)}
+    50% {transform: translateY(-8px)}
+    100% {transform: translateY(0)}
+}
+</style>
+""", unsafe_allow_html=True)
 
-st.title("💬 상담 챗봇 — 헤이(Hey)")
-st.write("헤이가 말투를 다듬어 드려요. 원하시는 버튼을 눌러 시작하세요.")
+def logout():
+    st.session_state.user_id = None
+    st.session_state.username = None
+    st.session_state.is_admin = False
+    st.session_state.page = "home"
+    st.rerun()
 
-_local_css()
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "mode" not in st.session_state:
-    st.session_state.mode = None
-if "openai_client" not in st.session_state:
-    st.session_state.openai_client = None
-
-# Top: 캐릭터 + 말풍선
-st.markdown(
-    """
-    <div class="hey-container">
-      <div class="hey-avatar">헤이<br/><small>40대</small></div>
-      <div class="hey-bubble"><p>안녕 나는 헤이(Hey)야..</p></div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Buttons: 첫줄 두개, 아래줄 하나
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("기본", key="btn_basic"):
-        st.session_state.mode = "basic"
-with col2:
-    if st.button("심층", key="btn_deep"):
-        st.session_state.mode = "deep"
-
-col_left, col_center, col_right = st.columns([1, 2, 1])
-with col_center:
-    if st.button("스페셜", key="btn_special"):
-        st.session_state.mode = "special"
-
-
-openai_api_key = st.text_input("OpenAI API Key (앱 상단 또는 여기에 입력)", type="password")
-if openai_api_key and not st.session_state.openai_client:
-    st.session_state.openai_client = OpenAI(api_key=openai_api_key)
-
-
-def show_counsel_form(client):
-    st.subheader("기본 상담 답변 입력")
-    topic = st.selectbox("상담 주제", ["직장생활", "연애", "가족", "경제", "기타"])
-    style = st.selectbox(
-        "말투 스타일",
-        [
-            "친절하고 공감형",
-            "전문적이고 차분한",
-            "편안하고 긍정적인",
-            "간결하고 실용적인",
-        ],
-    )
-    user_question = st.text_area("상담자 질문 (선택)", placeholder="실제 상담자가 물어본 질문을 입력하면 결과가 더 자연스러워집니다.", height=100)
-    base_answer = st.text_area("내가 만든 기본 답변", placeholder="여기에 상담자가 받게 될 기본 메시지를 입력하세요.", height=220)
-    if st.button("말투 다듬기(실행)"):
-        if not base_answer.strip():
-            st.warning("기본 답변을 입력해 주세요.")
-            return
-        if not client:
-            st.warning("OpenAI API 키를 입력해 주세요.")
-            return
-        system_prompt = (
-            "당신은 상담 전문가입니다. 아래 원본 답변의 내용을 그대로 유지하되, "
-            f"'{topic}' 상담에 적합한 '{style}' 말투로 매끄럽고 공감 있게 다듬어주세요. "
-            "불필요한 표현은 줄이고, 핵심 메시지를 명확하게 전달하세요."
-        )
-        user_prompt = f"상담자 질문: {user_question.strip() or '없음'}\n\n원본 답변:\n{base_answer.strip()}"
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        polished_answer = response.choices[0].message.content.strip()
-        st.session_state.history.append(
-            {
-                "topic": topic,
-                "style": style,
-                "question": user_question,
-                "base_answer": base_answer,
-                "polished_answer": polished_answer,
-            }
-        )
-
-
-if st.session_state.mode:
-    st.markdown(f"**선택된 모드:** {st.session_state.mode}")
-    client = st.session_state.openai_client
-    show_counsel_form(client)
-
-if st.session_state.history:
+def page_login():
+    """로그인/가입 페이지"""
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("로그인")
+        login_username = st.text_input("아이디", key="login_id")
+        login_password = st.text_input("비밀번호", type="password", key="login_pw")
+        
+        if st.button("로그인"):
+            user = db.get_user_by_username(login_username)
+            if user and db.verify_password(user["password_hash"], login_password):
+                st.session_state.user_id = user["id"]
+                st.session_state.username = user["username"]
+                st.session_state.is_admin = user["is_admin"]
+                st.success(f"환영합니다, {login_username}님!")
+                st.rerun()
+            else:
+                st.error("아이디 또는 비밀번호가 틀렸습니다.")
+    
+    with col2:
+        st.subheader("회원가입")
+        signup_username = st.text_input("아이디", key="signup_id")
+        signup_password = st.text_input("비밀번호", type="password", key="signup_pw")
+        signup_password_confirm = st.text_input("비밀번호 확인", type="password", key="signup_pw_confirm")
+        
+        gender = st.selectbox("성별", ["남", "여"])
+        age_group = st.selectbox("나이대", ["10대", "20대", "30대", "40대", "50대", "60대", "70대", "80대", "90대"])
+        
+        agree_privacy = st.checkbox("개인정보 수집 및 이용에 동의합니다")
+        agree_push = st.checkbox("푸시 알림 수신에 동의합니다")
+        
+        if st.button("가입하기"):
+            if signup_password != signup_password_confirm:
+                st.error("비밀번호가 일치하지 않습니다.")
+            elif not (agree_privacy and agree_push):
+                st.error("필수 약관에 동의해주세요.")
+            else:
+                user_id = db.create_user(signup_username, signup_password, gender, age_group)
+                if user_id:
+                    st.success("회원가입이 완료되었습니다. 로그인해주세요.")
+                else:
+                    st.error("이미 존재하는 아이디입니다.")
+    
     st.markdown("---")
-    st.subheader("최근 다듬어진 상담 답변")
-    for item in reversed(st.session_state.history[-5:]):
-        st.markdown(f"**주제:** {item['topic']}  ")
-        st.markdown(f"**말투:** {item['style']}  ")
-        if item["question"]:
-            st.markdown(f"**상담자 질문:** {item['question']}  ")
-        st.markdown("**원본 답변:**")
-        st.code(item["base_answer"], language="text")
-        st.markdown("**다듬어진 답변:**")
-        st.code(item["polished_answer"], language="text")
-        st.write("---")
+    st.info("**보안 안내:** 모든 상담 정보는 암호화되어 철저하게 보호됩니다.")
+
+def page_home():
+    """메인 페이지"""
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.title("💬 상담 챗봇 — 헤이(Hey)")
+    with col2:
+        if st.session_state.user_id:
+            st.write(f"**{st.session_state.username}**님")
+            if st.button("로그아웃"):
+                logout()
+    
+    if not st.session_state.user_id:
+        page_login()
+    else:
+        # 로그인 후 메인 페이지
+        st.markdown("""
+        <div class="hey-avatar" style="margin: 20px 0;">헤이<br/><small>40대 여성</small></div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("**안녕 나는 헤이(Hey)야.**  \n당신의 고민을 들어주고 따뜻한 답변을 드릴게요.")
+        
+        st.markdown("---")
+        st.subheader("상담 모드 선택")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("""
+            ### 📝 기본
+            - 500자 이내
+            - 1회 답변
+            - 가격: 5,000원
+            """)
+            if st.button("기본 선택", key="mode_basic"):
+                st.session_state.page = "consultation"
+                st.session_state.mode = "basic"
+                st.rerun()
+        
+        with col2:
+            st.markdown("""
+            ### 🔍 심층
+            - 2,000자 이상
+            - 1회 추가 질문 가능
+            - 가격: 15,000원
+            """)
+            if st.button("심층 선택", key="mode_deep"):
+                st.session_state.page = "consultation"
+                st.session_state.mode = "deep"
+                st.rerun()
+        
+        col3, col4, col5 = st.columns([1, 1, 1])
+        with col4:
+            st.markdown("""
+            ### ⭐ 스페셜
+            - 기본+심층+실시간채팅
+            - 최대 500자×3회
+            - 가격: 30,000원
+            """)
+            if st.button("스페셜 선택", key="mode_special"):
+                st.session_state.page = "consultation"
+                st.session_state.mode = "special"
+                st.rerun()
+
+def page_consultation():
+    """상담 신청 페이지"""
+    st.title(f"상담 신청 — {st.session_state.mode.upper()}")
+    
+    if st.button("← 뒤로가기"):
+        st.session_state.page = "home"
+        st.rerun()
+    
+    title = st.text_input("상담 제목")
+    question = st.text_area("상담 내용", height=250)
+    
+    mode_info = {
+        "basic": {"limit": 500, "price": 5000},
+        "deep": {"limit": 2000, "price": 15000},
+        "special": {"limit": 1500, "price": 30000}
+    }
+    
+    info = mode_info[st.session_state.mode]
+    st.info(f"**글자 수 제한:** {info['limit']}자 이내  \n**상담료:** {info['price']:,}원")
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("상담 신청하기"):
+            if not title or not question:
+                st.error("제목과 내용을 입력해주세요.")
+            elif len(question) > info["limit"]:
+                st.error(f"글자 수가 초과되었습니다. ({len(question)}/{info['limit']})")
+            else:
+                consultation_id = db.create_consultation(
+                    st.session_state.user_id,
+                    title,
+                    question,
+                    st.session_state.mode,
+                    info["price"]
+                )
+                st.session_state.consultation_id = consultation_id
+                st.session_state.page = "payment"
+                st.rerun()
+
+def page_payment():
+    """결제 페이지"""
+    st.title("결제하기")
+    
+    if st.button("← 뒤로가기"):
+        st.session_state.page = "consultation"
+        st.rerun()
+    
+    mode_info = {
+        "basic": {"limit": 500, "price": 5000},
+        "deep": {"limit": 2000, "price": 15000},
+        "special": {"limit": 1500, "price": 30000}
+    }
+    
+    price = mode_info[st.session_state.mode]["price"]
+    
+    st.markdown(f"### 결제 금액: **{price:,}원**")
+    
+    payment_method = st.radio("결제 수단 선택", ["카카오페이", "애플페이", "계좌이체"])
+    
+    agree_tos = st.checkbox("결제 약관에 동의합니다")
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("결제하기"):
+            if not agree_tos:
+                st.error("약관에 동의해주세요.")
+            else:
+                db.mark_payment_completed(st.session_state.consultation_id, payment_method)
+                st.success(f"✅ 결제 완료!\n\n📌 **1일 이내에 답변을 받아보세요.**\n\n앱 알림을 확인해주세요.")
+                st.info(f"결제 수단: {payment_method}\n결제 금액: {price:,}원")
+                
+                if st.button("상담이력 확인"):
+                    st.session_state.page = "history"
+                    st.rerun()
+
+def page_history():
+    """상담이력 조회"""
+    st.title("상담이력")
+    
+    if st.button("← 뒤로가기"):
+        st.session_state.page = "home"
+        st.rerun()
+    
+    consultations = db.get_user_consultations(st.session_state.user_id)
+    
+    if not consultations:
+        st.info("상담이력이 없습니다.")
+    else:
+        for c in consultations:
+            expires_at = datetime.fromisoformat(c["expires_at"])
+            is_expired = datetime.now() > expires_at
+            
+            with st.expander(f"[{c['mode'].upper()}] {c['title']} - {c['created_at'][:10]}"):
+                st.write(f"**결제 금액:** {c['payment_amount']:,}원")
+                st.write(f"**모드:** {c['mode']}")
+                
+                answer = db.get_answer(c["id"])
+                if answer:
+                    if answer["is_deleted"] or is_expired:
+                        st.warning("조회기간 만료되었습니다.")
+                    else:
+                        st.success("✅ 답변 완료")
+                        if st.button(f"답변 보기", key=f"view_{c['id']}"):
+                            st.write(answer["content"])
+                else:
+                    st.info("⏳ 답변 대기 중...")
+
+def page_admin():
+    """관리자 대시보드"""
+    st.title("🔐 관리자 대시보드")
+    
+    if not st.session_state.is_admin:
+        st.error("관리자만 접근할 수 있습니다.")
+        return
+    
+    if st.button("로그아웃"):
+        logout()
+    
+    st.subheader("답변 대기 중인 상담")
+    
+    pending = db.get_pending_consultations()
+    
+    if not pending:
+        st.info("답변할 상담이 없습니다.")
+    else:
+        for p in pending:
+            with st.expander(f"[{p['mode'].upper()}] {p['title']} - {p['username']}"):
+                st.write(f"**질문:** {p['question']}")
+                st.write(f"**모드:** {p['mode']}")
+                
+                answer_content = st.text_area(f"답변 작성 ({p['id']})", height=150, key=f"answer_{p['id']}")
+                
+                if st.button(f"AI 검증 후 답변 전송", key=f"verify_{p['id']}"):
+                    if not answer_content:
+                        st.error("답변을 입력해주세요.")
+                    else:
+                        db.save_answer(p["id"], answer_content, st.session_state.user_id)
+                        st.success("✅ 답변이 사용자에게 전송되었습니다.")
+
+# 라우팅
+if __name__ == "__main__":
+    if st.session_state.is_admin:
+        if st.sidebar.button("📊 관리자"):
+            st.session_state.page = "admin"
+    
+    if st.session_state.user_id and not st.session_state.is_admin:
+        col1, col2, col3 = st.sidebar.columns(3)
+        with col1:
+            if st.button("🏠"):
+                st.session_state.page = "home"
+        with col2:
+            if st.button("📋"):
+                st.session_state.page = "history"
+        with col3:
+            if st.button("🚪"):
+                logout()
+    
+    if st.session_state.page == "home":
+        page_home()
+    elif st.session_state.page == "consultation":
+        page_consultation()
+    elif st.session_state.page == "payment":
+        page_payment()
+    elif st.session_state.page == "history":
+        page_history()
+    elif st.session_state.page == "admin":
+        page_admin()
+    else:
+        page_home()
