@@ -223,9 +223,11 @@ def delete_expired_answers():
     conn.commit()
     conn.close()
 
-def init_db():
-    """데이터베이스 및 관리자 계정 초기화"""
-    init_db()
-    # 관리자 계정 생성 (기존이 없으면)
-    if not get_user_by_username("admin"):
-        create_user("admin", "admin123", "unknown", "40대", is_admin=True)
+# 초기화 시 관리자 계정 자동 생성
+if get_user_by_username is not None:
+    # DB 최초 생성 시에만 실행
+    try:
+        if not get_user_by_username("admin"):
+            create_user("admin", "admin123", "unknown", "40대", is_admin=True)
+    except:
+        pass
